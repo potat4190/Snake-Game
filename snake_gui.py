@@ -4,6 +4,7 @@ import random
 import math
 from typing import Optional
 from snake_logic import Game
+from user_manager import load_users, create_user, update_high_score, get_high_score, has_users
 
 # ---- Configuration ------------------------------------------------
 CELL_SIZE = 24
@@ -55,28 +56,285 @@ class SnakeGUI:
         self.root.title("\U0001f40d Snake")
         self.root.configure(bg=BG_COLOR)
 
+        # --- Current user ---
+        self.current_user: Optional[str] = None
+
+        # --- Container for swappable screens ---
+        self.main_container = tk.Frame(root, bg=BG_COLOR)
+        self.main_container.pack(fill="both", expand=True)
+
+        # --- Game model ---
+        self.model = Game(GRID_WIDTH, GRID_HEIGHT, start_length=4)
+        self.direction_queue: Optional[str] = None
+        self.after_id = None
+
+        # --- Effect bookkeeping ---
+        self.growth_effects: list = []
+        self.effect_after_id = None
+
+        # --- Show user menu first ---
+        self._show_user_menu()
+
+    # ----------------------------------------------------------------
+    #  USER MENU SCREENS
+    # ----------------------------------------------------------------
+    def _clear_container(self):
+        """Remove all widgets from the main container."""
+        for widget in self.main_container.winfo_children():
+            widget.destroy()
+
+    def _show_user_menu(self):
+        """Show the initial user selection / creation menu."""
+        self._clear_container()
+        f = self.main_container
+
+        tk.Label(f, text="S N A K E", font=("Consolas", 24, "bold"),
+                 bg=BG_COLOR, fg=SCORE_CLR).pack(pady=(40, 10))
+        tk.Label(f, text="\U0001f40d", font=("Segoe UI Emoji", 36),
+                 bg=BG_COLOR).pack(pady=(0, 20))
+
+        users = load_users()
+
+        if users:
+            tk.Label(f, text="Welcome! Choose an option:",
+                     font=("Consolas", 13), bg=BG_COLOR,
+                     fg=TEXT_COLOR).pack(pady=(10, 16))
+
+            btn_frame = tk.Frame(f, bg=BG_COLOR)
+            btn_frame.pack(pady=6)
+
+            btn_existing = tk.Button(
+                btn_frame, text="\U0001f464  Select Existing User",
+                font=("Consolas", 12, "bold"),
+                bg=BTN_BG, fg=BTN_FG,
+                activebackground=BTN_HOVER, activeforeground="#fff",
+                relief="flat", bd=0, padx=20, pady=8,
+                cursor="hand2", command=self._show_select_user)
+            btn_existing.pack(pady=6)
+            btn_existing.bind("<Enter>",
+                lambda e: btn_existing.config(bg=BTN_HOVER))
+            btn_existing.bind("<Leave>",
+                lambda e: btn_existing.config(bg=BTN_BG))
+
+            btn_new = tk.Button(
+                btn_frame, text="\u2795  Create New User",
+                font=("Consolas", 12, "bold"),
+                bg=BTN_BG, fg=BTN_FG,
+                activebackground=BTN_HOVER, activeforeground="#fff",
+                relief="flat", bd=0, padx=20, pady=8,
+                cursor="hand2", command=self._show_create_user)
+            btn_new.pack(pady=6)
+            btn_new.bind("<Enter>",
+                lambda e: btn_new.config(bg=BTN_HOVER))
+            btn_new.bind("<Leave>",
+                lambda e: btn_new.config(bg=BTN_BG))
+        else:
+            tk.Label(f, text="No users found. Create one to start!",
+                     font=("Consolas", 13), bg=BG_COLOR,
+                     fg=TEXT_COLOR).pack(pady=(10, 16))
+
+            btn_new = tk.Button(
+                f, text="\u2795  Create New User",
+                font=("Consolas", 12, "bold"),
+                bg=BTN_BG, fg=BTN_FG,
+                activebackground=BTN_HOVER, activeforeground="#fff",
+                relief="flat", bd=0, padx=20, pady=8,
+                cursor="hand2", command=self._show_create_user)
+            btn_new.pack(pady=10)
+            btn_new.bind("<Enter>",
+                lambda e: btn_new.config(bg=BTN_HOVER))
+            btn_new.bind("<Leave>",
+                lambda e: btn_new.config(bg=BTN_BG))
+
+        tk.Label(f, text="", bg=BG_COLOR).pack(pady=30)  # spacer
+
+    def _show_select_user(self):
+        """Show a screen listing all existing users and their high scores."""
+        self._clear_container()
+        f = self.main_container
+
+        tk.Label(f, text="Select a User", font=("Consolas", 20, "bold"),
+                 bg=BG_COLOR, fg=SCORE_CLR).pack(pady=(30, 16))
+
+        users = load_users()
+
+        # Scrollable list frame
+        list_outer = tk.Frame(f, bg=ACCENT, padx=2, pady=2)
+        list_outer.pack(padx=40, pady=(0, 10))
+
+        list_canvas = tk.Canvas(list_outer, bg=PANEL_BG, highlightthickness=0,
+                                width=380, height=min(len(users) * 48 + 10, 300))
+        scrollbar = tk.Scrollbar(list_outer, orient="vertical",
+                                 command=list_canvas.yview)
+        scroll_frame = tk.Frame(list_canvas, bg=PANEL_BG)
+
+        scroll_frame.bind("<Configure>",
+            lambda e: list_canvas.configure(scrollregion=list_canvas.bbox("all")))
+        list_canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        list_canvas.configure(yscrollcommand=scrollbar.set)
+
+        list_canvas.pack(side="left", fill="both", expand=True)
+        if len(users) * 48 + 10 > 300:
+            scrollbar.pack(side="right", fill="y")
+
+        # Header row
+        hdr = tk.Frame(scroll_frame, bg=ACCENT)
+        hdr.pack(fill="x", padx=4, pady=(6, 2))
+        tk.Label(hdr, text="Username", font=("Consolas", 11, "bold"),
+                 bg=ACCENT, fg=TEXT_COLOR, width=20, anchor="w").pack(side="left", padx=8)
+        tk.Label(hdr, text="High Score", font=("Consolas", 11, "bold"),
+                 bg=ACCENT, fg=SCORE_CLR, width=10, anchor="e").pack(side="right", padx=8)
+
+        # User rows
+        sorted_users = sorted(users.items(), key=lambda x: x[1], reverse=True)
+        for i, (username, high_score) in enumerate(sorted_users):
+            row_bg = "#1c2a4a" if i % 2 == 0 else PANEL_BG
+            row = tk.Frame(scroll_frame, bg=row_bg, cursor="hand2")
+            row.pack(fill="x", padx=4, pady=1)
+
+            tk.Label(row, text=username, font=("Consolas", 11),
+                     bg=row_bg, fg=TEXT_COLOR, width=20,
+                     anchor="w").pack(side="left", padx=8, pady=6)
+            tk.Label(row, text=str(high_score), font=("Consolas", 11, "bold"),
+                     bg=row_bg, fg=SCORE_CLR, width=10,
+                     anchor="e").pack(side="right", padx=8, pady=6)
+
+            # Bind click to select user
+            for widget in [row] + row.winfo_children():
+                widget.bind("<Button-1>",
+                    lambda e, u=username: self._select_user(u))
+                widget.bind("<Enter>",
+                    lambda e, r=row: r.config(bg=BTN_HOVER) or
+                        [c.config(bg=BTN_HOVER) for c in r.winfo_children()])
+                widget.bind("<Leave>",
+                    lambda e, r=row, bg=row_bg: r.config(bg=bg) or
+                        [c.config(bg=bg) for c in r.winfo_children()])
+
+        # Back button
+        btn_back = tk.Button(
+            f, text="\u25C0  Back",
+            font=("Consolas", 11, "bold"),
+            bg=BTN_BG, fg=BTN_FG,
+            activebackground=BTN_HOVER, activeforeground="#fff",
+            relief="flat", bd=0, padx=16, pady=6,
+            cursor="hand2", command=self._show_user_menu)
+        btn_back.pack(pady=14)
+        btn_back.bind("<Enter>",
+            lambda e: btn_back.config(bg=BTN_HOVER))
+        btn_back.bind("<Leave>",
+            lambda e: btn_back.config(bg=BTN_BG))
+
+    def _show_create_user(self):
+        """Show the create-new-user screen."""
+        self._clear_container()
+        f = self.main_container
+
+        tk.Label(f, text="Create New User", font=("Consolas", 20, "bold"),
+                 bg=BG_COLOR, fg=SCORE_CLR).pack(pady=(40, 20))
+
+        tk.Label(f, text="Enter your username:",
+                 font=("Consolas", 12), bg=BG_COLOR,
+                 fg=TEXT_COLOR).pack(pady=(0, 8))
+
+        entry_frame = tk.Frame(f, bg=ACCENT, padx=2, pady=2)
+        entry_frame.pack()
+        self.username_entry = tk.Entry(
+            entry_frame, font=("Consolas", 14),
+            bg=PANEL_BG, fg=TEXT_COLOR, insertbackground=TEXT_COLOR,
+            relief="flat", width=22)
+        self.username_entry.pack(padx=4, pady=4)
+        self.username_entry.focus_set()
+
+        self.create_error_label = tk.Label(
+            f, text="", font=("Consolas", 10),
+            bg=BG_COLOR, fg="#ef4444")
+        self.create_error_label.pack(pady=(4, 0))
+
+        btn_create = tk.Button(
+            f, text="\u2714  Create & Play",
+            font=("Consolas", 12, "bold"),
+            bg=BTN_BG, fg=BTN_FG,
+            activebackground=BTN_HOVER, activeforeground="#fff",
+            relief="flat", bd=0, padx=20, pady=8,
+            cursor="hand2", command=self._do_create_user)
+        btn_create.pack(pady=14)
+        btn_create.bind("<Enter>",
+            lambda e: btn_create.config(bg=BTN_HOVER))
+        btn_create.bind("<Leave>",
+            lambda e: btn_create.config(bg=BTN_BG))
+
+        # Allow Enter key to submit
+        self.username_entry.bind("<Return>", lambda e: self._do_create_user())
+
+        btn_back = tk.Button(
+            f, text="\u25C0  Back",
+            font=("Consolas", 11, "bold"),
+            bg=BTN_BG, fg=BTN_FG,
+            activebackground=BTN_HOVER, activeforeground="#fff",
+            relief="flat", bd=0, padx=16, pady=6,
+            cursor="hand2", command=self._show_user_menu)
+        btn_back.pack(pady=4)
+        btn_back.bind("<Enter>",
+            lambda e: btn_back.config(bg=BTN_HOVER))
+        btn_back.bind("<Leave>",
+            lambda e: btn_back.config(bg=BTN_BG))
+
+    def _do_create_user(self):
+        """Handle the create-user action."""
+        username = self.username_entry.get().strip()
+        if not username:
+            self.create_error_label.config(text="Username cannot be empty.")
+            return
+        if len(username) > 20:
+            self.create_error_label.config(text="Username must be 20 characters or less.")
+            return
+        if not create_user(username):
+            self.create_error_label.config(text=f'User "{username}" already exists.')
+            return
+        self._select_user(username)
+
+    def _select_user(self, username: str):
+        """Set current user and transition to the game screen."""
+        self.current_user = username
+        self._show_game_screen()
+
+    # ----------------------------------------------------------------
+    #  GAME SCREEN SETUP
+    # ----------------------------------------------------------------
+    def _show_game_screen(self):
+        """Build the game UI (canvas, HUD, buttons) and show it."""
+        self._clear_container()
+        f = self.main_container
+
         canvas_w = GRID_WIDTH * CELL_SIZE
         canvas_h = GRID_HEIGHT * CELL_SIZE
 
+        high = get_high_score(self.current_user)
+
         # --- Title ---
-        tk.Label(root, text="S N A K E", font=("Consolas", 20, "bold"),
+        tk.Label(f, text="S N A K E", font=("Consolas", 20, "bold"),
                  bg=BG_COLOR, fg=SCORE_CLR).pack(pady=(12, 4))
 
         # --- Canvas with accent border ---
-        frame = tk.Frame(root, bg=ACCENT, padx=2, pady=2)
+        frame = tk.Frame(f, bg=ACCENT, padx=2, pady=2)
         frame.pack(padx=10)
         self.canvas = tk.Canvas(frame, width=canvas_w, height=canvas_h,
                                 bg=GRASS_BASE, highlightthickness=0)
         self.canvas.pack()
 
         # --- HUD ---
-        self.hud = tk.Label(root, text="Score: 0",
-                            font=("Consolas", 16, "bold"),
+        hud_frame = tk.Frame(f, bg=BG_COLOR)
+        hud_frame.pack(pady=8)
+
+        self.hud = tk.Label(hud_frame,
+                            text=f"\U0001f464 {self.current_user}   |   "
+                                 f"Score: 0   |   Best: {high}",
+                            font=("Consolas", 14, "bold"),
                             bg=BG_COLOR, fg=SCORE_CLR)
-        self.hud.pack(pady=8)
+        self.hud.pack()
 
         # --- Buttons ---
-        btn_frame = tk.Frame(root, bg=BG_COLOR)
+        btn_frame = tk.Frame(f, bg=BG_COLOR)
         btn_frame.pack(pady=6)
 
         self.start_button = tk.Button(
@@ -88,13 +346,25 @@ class SnakeGUI:
             cursor="hand2", command=self.start)
         self.start_button.pack(side="left", padx=6)
 
-        # hover feedback
         self.start_button.bind("<Enter>",
             lambda e: self.start_button.config(bg=BTN_HOVER))
         self.start_button.bind("<Leave>",
             lambda e: self.start_button.config(bg=BTN_BG))
 
-        tk.Label(root, text="Arrow keys or WASD to move",
+        btn_switch = tk.Button(
+            btn_frame, text="\U0001f464  Switch User",
+            font=("Consolas", 11, "bold"),
+            bg=BTN_BG, fg=BTN_FG,
+            activebackground=BTN_HOVER, activeforeground="#fff",
+            relief="flat", bd=0, padx=16, pady=6,
+            cursor="hand2", command=self._back_to_menu)
+        btn_switch.pack(side="left", padx=6)
+        btn_switch.bind("<Enter>",
+            lambda e: btn_switch.config(bg=BTN_HOVER))
+        btn_switch.bind("<Leave>",
+            lambda e: btn_switch.config(bg=BTN_BG))
+
+        tk.Label(f, text="Arrow keys or WASD to move",
                  font=("Consolas", 9), bg=BG_COLOR,
                  fg="#6b7280").pack(pady=(2, 10))
 
@@ -103,22 +373,25 @@ class SnakeGUI:
                        ("<Up>", "Up"), ("<Down>", "Down"),
                        ("a", "Left"), ("d", "Right"),
                        ("w", "Up"), ("s", "Down")]:
-            root.bind(key, lambda e, d=d: self.queue_direction(d))
-
-        # --- Game model ---
-        self.model = Game(GRID_WIDTH, GRID_HEIGHT, start_length=4)
-        self.direction_queue: Optional[str] = None
-        self.after_id = None
-
-        # --- Effect bookkeeping ---
-        self.growth_effects: list = []
-        self.effect_after_id = None
+            self.root.bind(key, lambda e, d=d: self.queue_direction(d))
 
         # --- Draw persistent grass layer ---
         self._draw_grass()
 
         # --- Initial draw ---
         self.draw()
+
+    def _back_to_menu(self):
+        """Stop any active game and go back to the user menu."""
+        if self.after_id:
+            self.root.after_cancel(self.after_id)
+            self.after_id = None
+        if self.effect_after_id:
+            self.root.after_cancel(self.effect_after_id)
+            self.effect_after_id = None
+        self.growth_effects = []
+        self.current_user = None
+        self._show_user_menu()
 
     # ----------------------------------------------------------------
     #  GRASS BACKGROUND
@@ -335,7 +608,9 @@ class SnakeGUI:
             self.effect_after_id = None
 
         self.model.reset()
-        self.hud.config(text=f"Score: {self.model.score}")
+        high = get_high_score(self.current_user) if self.current_user else 0
+        self.hud.config(text=f"\U0001f464 {self.current_user}   |   "
+                             f"Score: 0   |   Best: {high}")
         self.canvas.delete("snake")
         self.canvas.delete("food")
         self.canvas.delete("effect")
@@ -361,7 +636,9 @@ class SnakeGUI:
             self._trigger_growth_effect(*head)
 
         self.draw()
-        self.hud.config(text=f"Score: {self.model.score}")
+        high = get_high_score(self.current_user) if self.current_user else 0
+        self.hud.config(text=f"\U0001f464 {self.current_user}   |   "
+                             f"Score: {self.model.score}   |   Best: {high}")
 
         if result["game_over"]:
             self.game_over()
@@ -394,6 +671,11 @@ class SnakeGUI:
     #  GAME OVER OVERLAY
     # ----------------------------------------------------------------
     def game_over(self):
+        # Save high score
+        new_best = False
+        if self.current_user:
+            new_best = update_high_score(self.current_user, self.model.score)
+
         w = GRID_WIDTH * CELL_SIZE
         h = GRID_HEIGHT * CELL_SIZE
 
@@ -402,7 +684,7 @@ class SnakeGUI:
             0, 0, w, h, fill="#000000", stipple="gray50", tags="overlay")
 
         # panel
-        bw, bh = 280, 110
+        bw, bh = 300, 140
         bx = w // 2 - bw // 2
         by = h // 2 - bh // 2
         self.canvas.create_rectangle(
@@ -410,14 +692,29 @@ class SnakeGUI:
             fill=PANEL_BG, outline=ACCENT, width=2, tags="overlay")
 
         self.canvas.create_text(
-            w // 2, h // 2 - 25, text="GAME OVER",
+            w // 2, h // 2 - 35, text="GAME OVER",
             fill="#ef4444", font=("Consolas", 22, "bold"), tags="overlay")
         self.canvas.create_text(
-            w // 2, h // 2 + 8, text=f"Score: {self.model.score}",
+            w // 2, h // 2 - 5, text=f"Score: {self.model.score}",
             fill=SCORE_CLR, font=("Consolas", 14), tags="overlay")
+        if new_best:
+            self.canvas.create_text(
+                w // 2, h // 2 + 18,
+                text="\u2B50 NEW HIGH SCORE! \u2B50",
+                fill="#fde047", font=("Consolas", 12, "bold"), tags="overlay")
+        else:
+            best = get_high_score(self.current_user) if self.current_user else 0
+            self.canvas.create_text(
+                w // 2, h // 2 + 18, text=f"Best: {best}",
+                fill=TEXT_COLOR, font=("Consolas", 11), tags="overlay")
         self.canvas.create_text(
-            w // 2, h // 2 + 32, text="Press RESTART to play again",
+            w // 2, h // 2 + 42, text="Press RESTART to play again",
             fill="#6b7280", font=("Consolas", 9), tags="overlay")
+
+        # Update HUD with latest high score
+        high = get_high_score(self.current_user) if self.current_user else 0
+        self.hud.config(text=f"\U0001f464 {self.current_user}   |   "
+                             f"Score: {self.model.score}   |   Best: {high}")
 
 
 # ====================================================================
