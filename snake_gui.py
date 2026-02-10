@@ -183,7 +183,7 @@ class SnakeGUI:
         tk.Label(hdr, text="Username", font=("Consolas", 11, "bold"),
                  bg=ACCENT, fg=TEXT_COLOR, width=20, anchor="w").pack(side="left", padx=8)
         tk.Label(hdr, text="High Score", font=("Consolas", 11, "bold"),
-                 bg=ACCENT, fg=SCORE_CLR, width=10, anchor="e").pack(side="right", padx=8)
+                 bg=ACCENT, fg=SCORE_CLR, width=21, anchor="e").pack(side="right", padx=8)
 
         # User rows
         sorted_users = sorted(users.items(), key=lambda x: x[1], reverse=True)
